@@ -5,7 +5,7 @@
  * pledge.js CLEANS up your PROMISES get it? Get it? (sigh) never mind.
  * 
  * <code> 
- * authAndLoadPromise(API_KEY, OPTIONAL_CLIENT_ID, [api1, api2...]).then(function() {
+ * authAndLoadPromise(API_KEY, CLIENT_ID, [api1, api2...]).then(function() {
  *   console.info('PLEDGE SUCCESS!!!');
  * }).then(function(){
  *   // https://developers.google.com/drive/v3/reference/files/list
@@ -126,12 +126,12 @@ function authAndLoadPromise(apiKey, clientId = null, apis = []) {
       'version': 'v1'
     },
     'drive': {
-      'scope': 'https://www.googleapis.com/auth/drive',
+      'scope': 'https://www.googleapis.com/auth/drive.readonly',
       'gapi': 'drive',
       'version': 'v3'
     },
     'calendar': {
-      'scope': 'https://www.googleapis.com/auth/calendar',
+      'scope': 'https://www.googleapis.com/auth/calendar.readonly',
       'gapi': 'calendar',
       'version': 'v3'
     },
@@ -161,7 +161,7 @@ function authAndLoadPromise(apiKey, clientId = null, apis = []) {
       'version': 'v3'
     },
     'spreadsheets': {
-      'scope': 'https://www.googleapis.com/auth/spreadsheets',
+      'scope': 'https://www.googleapis.com/auth/spreadsheets.readonly',
       'gapi': 'sheets',
       'version': 'v4',
       'discovery': 'https://sheets.googleapis.com/$discovery/rest?version=v4'
