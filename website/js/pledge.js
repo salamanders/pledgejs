@@ -1,6 +1,8 @@
 /* global  Promise, google, gapi */
 /*jshint esversion: 6, unused:true, strict:true, -W097 */
 /*exported fetchStatus, fetchJson, loadCharts, authAndLoadPromise,  */
+"use strict";
+
 /**
  * pledge.js CLEANS up your PROMISES get it? Get it? (sigh) never mind.
  * 
@@ -12,7 +14,6 @@
  *   return gapi.client.drive.files.list...
  * </code>
  */
-"use strict";
 
 /** fetch() promise chain helper */
 function fetchStatus(response) {
@@ -100,77 +101,87 @@ function lazyLoadGapi() {
   });
 }
 
+/** Mess with this list if you need different scopes, different APIs */
+var PLEDGE_LATEST = {
+  'profile': {
+    'scopes': ['profile'],
+    'gapi': 'oauth2',
+    'version': 'v2'
+  },
+  'email': {
+    'scopes': ['email'],
+    'gapi': 'plus',
+    'version': 'v1'
+  },
+  'plus': {
+    'scopes': ['https://www.googleapis.com/auth/plus.me'],
+    'gapi': 'plus',
+    'version': 'v1'
+  },
+  'drive': {
+    'scopes': [
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.metadata.readonly'
+    ],
+    'gapi': 'drive',
+    'version': 'v3'
+  },
+  'calendar': {
+    'scopes': ['https://www.googleapis.com/auth/calendar.readonly'],
+    'gapi': 'calendar',
+    'version': 'v3'
+  },
+  'gmail': {
+    'scopes': ['https://www.googleapis.com/auth/gmail.modify'],
+    'gapi': 'gmail',
+    'version': 'v1'
+  },
+  'urlshortener': {
+    'scopes': ['https://www.googleapis.com/auth/urlshortener'],
+    'gapi': 'urlshortener',
+    'version': 'v1'
+  },
+  'fusiontables': {
+    'scopes': ['https://www.googleapis.com/auth/fusiontables'],
+    'gapi': 'fusiontables',
+    'version': 'v2'
+  },
+  'yt-analytics': {
+    'scopes': ['https://www.googleapis.com/auth/yt-analytics'],
+    'gapi': 'youtubeAnalytics',
+    'version': 'v1'
+  },
+  'youtube': {
+    'scopes': ['https://www.googleapis.com/auth/youtube'],
+    'gapi': 'youtube',
+    'version': 'v3'
+  },
+  'spreadsheets': {
+    'scopes': ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    'gapi': 'sheets',
+    'version': 'v4',
+    'discovery': 'https://sheets.googleapis.com/$discovery/rest?version=v4'
+  },
+  'corechart': {
+    'chart-package': 'corechart'
+  },
+  'table': {
+    'chart-package': 'table'
+  },
+  'gantt': {
+    'chart-package': 'gantt'
+  }
+};
+
 /**
  * @param apiKey
  * @param clientId
  * @param apis
  *            Names of the api clients you want to use from LATEST, can be a regular API or a chart library
  */
-function authAndLoadPromise(apiKey, clientId = null, apis = []) {
+function authAndLoadPromise(apiKey, clientId, apis = []) {
   // TODO: All scopes in https://developers.google.com/identity/protocols/googlescopes
   // TODO: and https://developers.google.com/+/web/api/rest/oauth#authorization-scopes
-  const LATEST = {
-    'profile': {
-      'scope': 'profile',
-      'gapi': 'oauth2',
-      'version': 'v2'
-    },
-    'email': {
-      'scope': 'email',
-      'gapi': 'plus',
-      'version': 'v1'
-    },
-    'plus': {
-      'scope': 'https://www.googleapis.com/auth/plus.me',
-      'gapi': 'plus',
-      'version': 'v1'
-    },
-    'drive': {
-      'scope': 'https://www.googleapis.com/auth/drive.readonly',
-      'gapi': 'drive',
-      'version': 'v3'
-    },
-    'calendar': {
-      'scope': 'https://www.googleapis.com/auth/calendar.readonly',
-      'gapi': 'calendar',
-      'version': 'v3'
-    },
-    'gmail': {
-      'scope': 'https://www.googleapis.com/auth/gmail.modify',
-      'gapi': 'gmail',
-      'version': 'v1'
-    },
-    'urlshortener': {
-      'scope': 'https://www.googleapis.com/auth/urlshortener',
-      'gapi': 'urlshortener',
-      'version': 'v1'
-    },
-    'fusiontables': {
-      'scope': 'https://www.googleapis.com/auth/fusiontables',
-      'gapi': 'fusiontables',
-      'version': 'v2'
-    },
-    'yt-analytics': {
-      'scope': 'https://www.googleapis.com/auth/yt-analytics',
-      'gapi': 'youtubeAnalytics',
-      'version': 'v1'
-    },
-    'youtube': {
-      'scope': 'https://www.googleapis.com/auth/youtube',
-      'gapi': 'youtube',
-      'version': 'v3'
-    },
-    'spreadsheets': {
-      'scope': 'https://www.googleapis.com/auth/spreadsheets.readonly',
-      'gapi': 'sheets',
-      'version': 'v4',
-      'discovery': 'https://sheets.googleapis.com/$discovery/rest?version=v4'
-    },
-    'gantt': {
-      'chart-package': 'gantt'
-    }
-  };
-
   let scopes = [];
 
   return Promise.resolve().then(function () {
@@ -185,7 +196,7 @@ function authAndLoadPromise(apiKey, clientId = null, apis = []) {
 
     let charts = [];
     let toLoadPromises = apis.map(function (api) {
-      if (!LATEST[api]) {
+      if (!PLEDGE_LATEST[api]) {
         console.log('Unable to find API in LATEST list, loading directly from gapi.load, hope your scope is ok!', api);
         return new Promise(function (resolve) {
           gapi.load(api, {
@@ -193,21 +204,21 @@ function authAndLoadPromise(apiKey, clientId = null, apis = []) {
           });
         });
       }
-      if (LATEST[api].discovery && LATEST[api].scope) {
+      if (PLEDGE_LATEST[api].discovery && PLEDGE_LATEST[api].scopes) {
         console.info('Found API in latest list (with discovery URL):' + api);
-        scopes.push(LATEST[api].scope);
-        return gapi.client.load(LATEST[api].discovery);
+        scopes.push(...PLEDGE_LATEST[api].scopes);
+        return gapi.client.load(PLEDGE_LATEST[api].discovery);
       }
-      if (LATEST[api].gapi && LATEST[api].version && LATEST[api].scope) {
-        console.info('Found API in latest list (with scope and version):' + api);
-        scopes.push(LATEST[api].scope);
-        return gapi.client.load(LATEST[api].gapi, LATEST[api].version);
+      if (PLEDGE_LATEST[api].gapi && PLEDGE_LATEST[api].version && PLEDGE_LATEST[api].scopes) {
+        console.info('Found API in latest list (with scopes and version):' + api);
+        scopes.push(...PLEDGE_LATEST[api].scopes);
+        return gapi.client.load(PLEDGE_LATEST[api].gapi, PLEDGE_LATEST[api].version);
       }
       // TODO: Load based on scope prefix matching, and ensure unique loading.
-      if (LATEST[api]['chart-package']) {
+      if (PLEDGE_LATEST[api]['chart-package']) {
         console.info('Found API in Latest/Charts list' + api);
         // Not a pretty way to do a side-effect
-        charts.push(LATEST[api]['chart-package']);
+        charts.push(PLEDGE_LATEST[api]['chart-package']);
         return;
       }
       return Promise.reject('Unable to handle:', api);

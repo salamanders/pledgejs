@@ -11,7 +11,7 @@ Usage:
 ```
 <script src="https://pledgejs.appspot.com/js/pledge.js"></script>
 <script>
-authAndLoadPromise(YOUR_API_KEY, YOUR_OPTIONAL_CLIENT_ID, ['drive', 'spreadsheets']).then(function() {
+authAndLoadPromise(YOUR_API_KEY, YOUR_CLIENT_ID, ['drive', 'spreadsheets']).then(function() {
   // All your code goes here.
 ```
 

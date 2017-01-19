@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+<link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.indigo-pink.min.css">
+<script defer src="https://code.getmdl.io/1.3.0/material.min.js"></script>
+
+<script src="js/pledge.js"></script>
+<script src="js/my_contributions.js"></script>
+
+</head>
+<body>
+  <div id="spinner" class="mdl-spinner mdl-js-spinner is-active" style="margin: 1em;"></div>
+  
+  <div id="bubble_chart_div" style="width: 95vw; height: 95vh;"></div>
+  <div id="table_chart_div" style="width: 95vw; height: 95vh;"></div>
+
+  <button type="button" class="mdl-button mdl-js-button mdl-button--fab mdl-button--mini-fab mdl-button--colored"
+    id="show_help" style="position: absolute; bottom: 1em; right: 1em; z-index: 10;">?</button>
+  <dialog class="mdl-dialog" id="dialog_help">
+  <div class="mdl-dialog__content">
+    <h3>An example of what pledge.js can do in just a few lines.</h3>
+    <p>Performance review time has you searching for impact? Find the docs you collaborated the most on!</p>
+    <ul>
+      <li>X = time last modified</li>
+      <li>Y = total number of edits</li>
+      <li>Size = total number of collaborators</li>
+      <li>Color = percent of effort that was yours</li>
+    </ul>
+    <p>
+      <a href="mailto:benhill">feedback and questions.</a>
+    <p>
+  </div>
+  <div class="mdl-dialog__actions">
+    <button type="button" class="mdl-button close">Ok</button>
+  </div>
+  </dialog>
+
+  <script type="text/javascript">
+      // Wire up the help button
+      document.getElementById('show_help').addEventListener('click', function() {
+        document.getElementById('dialog_help').showModal();
+      });
+
+      // Wire up the un-help button
+      document.querySelector('#dialog_help .close').addEventListener('click', function() {
+        document.getElementById('dialog_help').close();
+      });
+    </script>
+
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-68216614-4', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+</body>
+
+</html>
