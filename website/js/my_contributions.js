@@ -1,4 +1,4 @@
-/*global gapi, authAndLoadPromise, google */
+/*global gapi, authAndLoadPromise, google, ThrottledBatch */
 /*jshint esversion: 6 */
 /*jshint unused:true */
 /*jshint strict:true */
@@ -6,7 +6,7 @@
 "use strict";
 
 // Information that we encounter along the way.
-var
+let
   fileData = {}, // ID to Name lookup at the enn
   myInfo = null, // Who the current user is
   dataTable = null; // For adding values over time
@@ -28,14 +28,14 @@ function processMyInfo(response) {
   if (!response.result || !response.result.emails || !response.result.emails[0].value) {
     Promise.reject('gapi.client.plus.people.get missing email:', response);
   } else {
-    var me = response.result;
+    let me = response.result;
     me.emailAddress = me.emails[0].value;
     me.userName = me.emailAddress.split('@')[0];
     return Promise.resolve(me);
   }
 }
 
-/** Authorize, get 100 most recently modified files that you can edit */
+/** Authorize, get 200 most recently modified files that you can edit */
 authAndLoadPromise(API_KEY, CLIENT_ID, APIS).then(function () {
   console.info('PLEDGE SUCCESS!');
   return gapi.client.plus.people.get({
@@ -78,63 +78,59 @@ authAndLoadPromise(API_KEY, CLIENT_ID, APIS).then(function () {
   });
 
   // commentBatch, one for each file.
-  var commentBatch = gapi.client.newBatch();
+  let commentBatch = new ThrottledBatch(20, 3000);
   resp.result.files.forEach(function (file) {
     commentBatch.add(gapi.client.drive.comments.list({
       'fileId': file.id,
       'includeDeleted': false,
       'pageSize': 100, // TODO(behill): more comments? API quota limits?
       'fields': 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
-    }), {
-      'id': file.id
-    });
+    }), file.id);
   });
 
   // revisionBatch, one for each file. Same Quota issues.
-  var revisionBatch = gapi.client.newBatch();
+  let revisionBatch = new ThrottledBatch(20, 3000);
   resp.result.files.filter(function (file) {
     return file.capabilities.canEdit;
   }).forEach(function (file) {
     revisionBatch.add(gapi.client.drive.revisions.list({
       'fileId': file.id,
       'fields': 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
-    }), {
-      'id': file.id
-    });
+    }), file.id);
   });
 
   // Get both batches in parallel. Possibly not good for rate limiting quotas.
-  return Promise.all([commentBatch, revisionBatch]);
+  return Promise.all([commentBatch.execute(), revisionBatch.execute()]);
 }).then(processBatches).then(function (counts) {
-  var spinner = document.getElementById('spinner');
+  let spinner = document.getElementById('spinner');
   spinner.parentNode.removeChild(spinner);
 
   console.log('counts', counts);
 
-  var debugData = [];
+  let debugData = [];
   Object.keys(counts).forEach(function (fileId) {
-    var maxDate = new Date(counts[fileId].reduce(function (max, elt) {
+    let maxDate = new Date(counts[fileId].reduce(function (max, elt) {
       return (myInfo.emailAddress == elt.emailAddress && elt.ts > max) ? elt.ts : max;
     }).ts);
 
-    var editCount = counts[fileId].length;
+    let editCount = counts[fileId].length;
 
     // Real Name: Edits
-    var contributors = {};
+    let contributors = {};
     counts[fileId].forEach(function (elt) {
       contributors[elt.emailAddress] = (contributors[elt.emailAddress] || 0) + 1;
     });
 
-    var numCollaborators = Object.keys(contributors).length;
+    let numCollaborators = Object.keys(contributors).length;
 
-    var percentYou = Math.round(100 * contributors[myInfo.emailAddress] / editCount);
+    let percentYou = Math.round(100 * contributors[myInfo.emailAddress] / editCount);
     // Work around annoying nulls, debug why later.
     if (!percentYou) {
       console.error('Unable to calculate percent', myInfo, editCount, contributors);
       percentYou = 0;
     }
 
-    var newRow = [
+    let newRow = [
       fileData[fileId].name,
       maxDate,
       editCount,
@@ -147,7 +143,7 @@ authAndLoadPromise(API_KEY, CLIENT_ID, APIS).then(function () {
 
   console.log('debugData', JSON.stringify(debugData));
 
-  var options = {
+  let options = {
     title: 'Your Documents (Color=% you, Size=# Collaborators)',
     hAxis: {
       title: 'Last Modified Date'
@@ -170,10 +166,10 @@ authAndLoadPromise(API_KEY, CLIENT_ID, APIS).then(function () {
     }
   };
 
-  var bubbleChart = new google.visualization.BubbleChart(document.getElementById('bubble_chart_div'));
+  let bubbleChart = new google.visualization.BubbleChart(document.getElementById('bubble_chart_div'));
   bubbleChart.draw(dataTable, options);
 
-  var tableChart = new google.visualization.Table(document.getElementById('table_chart_div'));
+  let tableChart = new google.visualization.Table(document.getElementById('table_chart_div'));
   tableChart.draw(dataTable, {
     showRowNumber: true,
     sortColumn: 0
@@ -184,10 +180,10 @@ authAndLoadPromise(API_KEY, CLIENT_ID, APIS).then(function () {
 });
 
 function processBatches(arr) {
-  var batchComments = arr[0].result,
-    batchRevisions = arr[1].result;
+  let batchComments = arr[0],
+    batchRevisions = arr[1];
   //ID to rows of info
-  var simpleBucket = {
+  let simpleBucket = {
     'counts': {},
     'push': function (key, elt) {
       if (!this.counts[key]) {
@@ -201,14 +197,14 @@ function processBatches(arr) {
   console.info('Repacking comments into a simpler object: ' + Object.keys(batchComments).length);
   Object.keys(batchComments).forEach(function (fileId) {
     // console.error('commentResult', fileId, batchComments[fileId]);
-    var commentResult = batchComments[fileId];
+    let commentResult = batchComments[fileId];
     if (commentResult.result.error) {
       console.error('Comment batch error:', fileId, commentResult.result.error);
     } else {
       if (commentResult.result.comments) {
         commentResult.result.comments.forEach(function (comment) {
           if (comment.author && comment.createdTime) {
-            // TODO: var commentAuthorId =  comment.author.emailAddress || comment.author.displayName;
+            // TODO: let commentAuthorId =  comment.author.emailAddress || comment.author.displayName;
 
             simpleBucket.push(fileId, {
               'type': 'comment',
@@ -239,7 +235,7 @@ function processBatches(arr) {
   console.log('Investigating revision: ' + Object.keys(batchRevisions).length);
   // console.error(batchRevisions);
   Object.keys(batchRevisions).forEach(function (fileId) {
-    var revisionResult = batchRevisions[fileId];
+    let revisionResult = batchRevisions[fileId];
     if (revisionResult.result.error) {
       console.error('Revision batch error:', fileId, revisionResult.result.error);
     } else {

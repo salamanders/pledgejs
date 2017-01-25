@@ -9,7 +9,7 @@ Doesn't wait for a reply before trying next batch.
 TODO: Stop on errors
 */
 class ThrottledBatch {
-  constructor(maxPerBatch = 100, waitTimeMs = 1000) {
+  constructor(maxPerBatch = 25, waitTimeMs = 1000) {
     this.maxPerBatch = maxPerBatch;
     this.waitTimeMs = waitTimeMs;
     this.queue = {};
@@ -29,7 +29,7 @@ class ThrottledBatch {
       batches.map((batch,i)=>{
         return new Promise((resolve)=>{
           setTimeout(()=>{
-            console.info(`ThrottledBatch calling batch ${i}`, batch);
+            console.info(`ThrottledBatch calling batch { number:${i}, length:${batch.length} }`);
             let gbatch = gapi.client.newBatch();
             batch.forEach(id => {
               gbatch.add(this.queue[id], {'id':id});
@@ -48,7 +48,7 @@ class ThrottledBatch {
     ).then(()=>{
       return this.results;
     }).catch(function (err) {
-      console.error('Error with ThrottledBatch all', err);
+      console.error('Error with ThrottledBatch all:', err);
       throw err;
     });
   }
