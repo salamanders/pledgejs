@@ -79,6 +79,12 @@ function processBatches(arr) {
                 }
                 // TODO: const commentAuthorId =  comment.author.emailAddress || comment.author.displayName;
 
+                // Always be looking for lookups.
+                if (comment.author.emailAddress &&
+                    comment.author.displayName) {
+                    nameToEmail[comment.author.displayName] = comment.author.emailAddress;
+                }
+
                 simpleBucket.put(fileId, {
                     type: 'comment',
                     emailAddress: comment.author.emailAddress,
@@ -86,6 +92,15 @@ function processBatches(arr) {
                 });
                 if (comment.replies) {
                     comment.replies.forEach(reply => {
+
+                        // Always be looking for lookups.
+                        if (reply.author &&
+                            reply.author.displayName &&
+                            reply.author.emailAddress) {
+                            nameToEmail[reply.author.displayName] = reply.author.emailAddress;
+                        }
+
+
                         if (reply.author &&
                             reply.author.displayName &&
                             !reply.author.emailAddress) {
@@ -159,7 +174,7 @@ function processCounts(counts) {
         let percentYou = Math.round(100 * contributors[myInfo.emailAddress] / editCount);
         // Work around annoying nulls, debug why later.
         if (!percentYou) {
-            console.error('Unable to calculate percent', myInfo, editCount, contributors);
+            console.error('Unable to calculate self contribution percent', myInfo, editCount, contributors);
             percentYou = 0;
         }
 
@@ -220,6 +235,13 @@ function processCounts(counts) {
 /** Authorize, get 200 most recently modified files that you can edit */
 login(API_KEY, CLIENT_ID, APIS)
     .then(() => {
+
+        const profile = gapi.auth2.getAuthInstance().currentUser.get().getBasicProfile();
+        myInfo = {
+            emailAddress: profile.getEmail()
+        };
+        console.info('Auth myInfo:', myInfo);
+
         // Have to init here, after loading google.visualization
         dataTable = new google.visualization.DataTable();
         // Label, X, Y[, Color str or num], [Size num]
@@ -251,16 +273,10 @@ login(API_KEY, CLIENT_ID, APIS)
         console.info('Total files found:' + resp.result.files.length);
         console.info('File 0 example:' + JSON.stringify(resp.result.files[0]));
 
-        if (!myInfo) {
-            const fileByMe = resp.result.files.find(file => file.lastModifyingUser && file.lastModifyingUser.me && file.lastModifyingUser.emailAddress);
-            myInfo = {
-                emailAddress: fileByMe.lastModifyingUser.emailAddress
-            };
-            console.info('Found my info:', myInfo);
-        }
-
         resp.result.files.forEach(file => {
-            if (file.lastModifyingUser && file.lastModifyingUser.displayName && file.lastModifyingUser.emailAddress) {
+            if (file.lastModifyingUser &&
+                file.lastModifyingUser.displayName &&
+                file.lastModifyingUser.emailAddress) {
                 nameToEmail[file.lastModifyingUser.displayName] = file.lastModifyingUser.emailAddress;
             }
 
