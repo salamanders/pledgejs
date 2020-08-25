@@ -11,23 +11,23 @@ const
     API_KEY = IS_PUBLIC ? "AIzaSyAPKnarANiEQJyXR1aJD4-9kCahMBzMV7s" : "AIzaSyC4FAjLw2DK-fz68kuR44O5DoZ6SWp1SlY",
     APIS = [
         {
-            gapi: 'oauth2',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
-            scopes: ['profile']
+            'gapi': 'oauth2',
+            'discovery': 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
+            'scopes': ['profile']
         },
         {
-            gapi: 'drive',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
-            scopes: [
+            'gapi': 'drive',
+            'discovery': 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
+            'scopes': [
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/drive.metadata.readonly'
             ]
         },
         {
-            chart: 'corechart'
+            'chart': 'corechart'
         },
         {
-            chart: 'table'
+            'chart': 'table'
         }
     ];
 
@@ -39,7 +39,8 @@ const
 
 let
     myInfo = null, // Who the current user is
-    dataTable = null; // For adding values over time
+    bubbleDataTable = null; // For adding values to the bubble chart
+    listDataTable = null; // For adding values to the document list
 
 class Multimap {
     constructor() {
@@ -80,9 +81,9 @@ function processBatches(arr) {
                 // TODO: const commentAuthorId =  comment.author.emailAddress || comment.author.displayName;
 
                 simpleBucket.put(fileId, {
-                    type: 'comment',
-                    emailAddress: comment.author.emailAddress,
-                    ts: comment.createdTime
+                    'type': 'comment',
+                    'emailAddress': comment.author.emailAddress,
+                    'ts': comment.createdTime
                 });
                 if (comment.replies) {
                     comment.replies.forEach(reply => {
@@ -100,9 +101,9 @@ function processBatches(arr) {
                             return;
                         }
                         simpleBucket.put(fileId, {
-                            type: 'reply',
-                            emailAddress: reply.author.emailAddress,
-                            ts: reply.createdTime
+                            'type': 'reply',
+                            'emailAddress': reply.author.emailAddress,
+                            'ts': reply.createdTime
                         });
 
                     });
@@ -126,9 +127,9 @@ function processBatches(arr) {
                     return;
                 }
                 simpleBucket.put(fileId, {
-                    type: 'revision',
-                    emailAddress: revision.lastModifyingUser.emailAddress,
-                    ts: revision.modifiedTime
+                    'type': 'revision',
+                    'emailAddress': revision.lastModifyingUser.emailAddress,
+                    'ts': revision.modifiedTime
                 });
             });
         }
@@ -145,7 +146,7 @@ function processCounts(counts) {
     const debugData = [];
     Object.keys(counts).forEach(fileId => {
         const maxDate = new Date(counts[fileId]
-            .reduce((max, elt) => (myInfo.emailAddress === elt.emailAddress && elt.ts > max) ? elt.ts : max).ts);
+            .reduce((max, elt) => (myInfo.emailAddress == elt.emailAddress && elt.ts > max) ? elt.ts : max).ts);
 
         const editCount = counts[fileId].length;
 
@@ -163,16 +164,21 @@ function processCounts(counts) {
             percentYou = 0;
         }
 
-        const newRow = [
-            //`<a href="${fileData[fileId].link}" target="_blank">${fileData[fileId].name}</a>`,
+        const newBubbleRow = [
             fileData[fileId].name,
             maxDate,
             editCount,
             percentYou,
             numCollaborators
         ];
-        dataTable.addRow(newRow);
-        debugData.push(newRow);
+        bubbleDataTable.addRow(newBubbleRow);
+        
+        // copy row data and replace first item to include document link
+        const newListRow = [...newBubbleRow];
+        newListRow[0] = `<a href="${fileData[fileId].link}" target="_blank">${fileData[fileId].name}</a>`;
+
+        listDataTable.addRow(newListRow);
+        debugData.push(newListRow);
     });
 
     console.log('debugData', JSON.stringify(debugData));
@@ -197,14 +203,11 @@ function processCounts(counts) {
             top: 80,
             width: '80%',
             height: '80%'
-        },
-        tooltip: {
-            isHtml: true
         }
     };
 
     const bubbleChart = new google.visualization.BubbleChart(document.getElementById('bubble_chart_div'));
-    bubbleChart.draw(dataTable, optionsBubble);
+    bubbleChart.draw(bubbleDataTable, optionsBubble);
 
 
     const optionsTable = {
@@ -213,7 +216,7 @@ function processCounts(counts) {
         allowHtml: true
     };
     const tableChart = new google.visualization.Table(document.getElementById('table_chart_div'));
-    tableChart.draw(dataTable, optionsTable);
+    tableChart.draw(listDataTable, optionsTable);
 }
 
 
@@ -221,13 +224,16 @@ function processCounts(counts) {
 login(API_KEY, CLIENT_ID, APIS)
     .then(() => {
         // Have to init here, after loading google.visualization
-        dataTable = new google.visualization.DataTable();
-        // Label, X, Y[, Color str or num], [Size num]
-        dataTable.addColumn('string', 'Doc Name');
-        dataTable.addColumn('date', 'Most Recent Edit');
-        dataTable.addColumn('number', 'Edit Count');
-        dataTable.addColumn('number', 'Percent You');
-        dataTable.addColumn('number', 'Distinct Collaborators');
+        bubbleDataTable = new google.visualization.DataTable();
+        listDataTable = new google.visualization.DataTable();
+        [bubbleDataTable, listDataTable].forEach(dataTable => {
+            // Label, X, Y[, Color str or num], [Size num]
+            dataTable.addColumn('string', 'Doc Name');
+            dataTable.addColumn('date', 'Most Recent Edit');
+            dataTable.addColumn('number', 'Edit Count');
+            dataTable.addColumn('number', 'Percent You');
+            dataTable.addColumn('number', 'Distinct Collaborators');
+        });
 
         const oldestDate = new Date();
         oldestDate.setFullYear(oldestDate.getFullYear() - 2);
@@ -235,11 +241,11 @@ login(API_KEY, CLIENT_ID, APIS)
 
         return gapi.client.drive.files.list({
             // https://developers.google.com/drive/v3/reference/files/list
-            corpus: 'user',
-            pageSize: 200,
-            orderBy: 'modifiedByMeTime desc',
-            spaces: 'drive',
-            q: "'me' in writers" +
+            'corpus': 'user',
+            'pageSize': 200,
+            'orderBy': 'modifiedByMeTime desc',
+            'spaces': 'drive',
+            'q': "'me' in writers" +
                 " AND trashed=false" +
                 ` AND viewedByMeTime>='${oldestDateString}'` +
                 ` AND modifiedTime>='${oldestDateString}'` +
@@ -254,7 +260,7 @@ login(API_KEY, CLIENT_ID, APIS)
         if (!myInfo) {
             const fileByMe = resp.result.files.find(file => file.lastModifyingUser && file.lastModifyingUser.me && file.lastModifyingUser.emailAddress);
             myInfo = {
-                emailAddress: fileByMe.lastModifyingUser.emailAddress
+                'emailAddress': fileByMe.lastModifyingUser.emailAddress
             };
             console.info('Found my info:', myInfo);
         }
@@ -265,8 +271,8 @@ login(API_KEY, CLIENT_ID, APIS)
             }
 
             fileData[file.id] = {
-                name: file.name,
-                link: file.webViewLink
+                'name': file.name,
+                'link': file.webViewLink
             };
         });
 
@@ -274,10 +280,10 @@ login(API_KEY, CLIENT_ID, APIS)
         const commentBatch = new ThrottledBatch(20, 3000);
         resp.result.files.forEach(file => {
             commentBatch.add(gapi.client.drive.comments.list({
-                fileId: file.id,
-                includeDeleted: false,
-                pageSize: 100, // TODO(behill): more comments? API quota limits?
-                fields: 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
+                'fileId': file.id,
+                'includeDeleted': false,
+                'pageSize': 100, // TODO(behill): more comments? API quota limits?
+                'fields': 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
             }), file.id);
         });
 
@@ -287,8 +293,8 @@ login(API_KEY, CLIENT_ID, APIS)
             .filter(file => file.capabilities.canEdit)
             .forEach(file => {
                 revisionBatch.add(gapi.client.drive.revisions.list({
-                    fileId: file.id,
-                    fields: 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
+                    'fileId': file.id,
+                    'fields': 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
                 }), file.id);
             });
 
