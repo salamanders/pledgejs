@@ -6,14 +6,14 @@
 /* Google API Login promise with built-in dialog box
 <code> 
 login(MY_KEY, MY_CLIENTID, [{
-  'gapi':'drive',
-  'discovery': 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
-  'scopes': [
+  gapi:'drive',
+  discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
+  scopes: [
     'https://www.googleapis.com/auth/drive.readonly',
     'https://www.googleapis.com/auth/drive.metadata.readonly'
   ]
 },{
-  'chart':'gantt'
+  chart:'gantt'
 }]).then...
 </code>
 */
@@ -47,7 +47,7 @@ function login(apiKey, clientId, apis) {
         if (charts.length > 0) {
             console.info('google.charts.load');
             return google.charts.load('current', {
-                'packages': [].concat(charts)
+                packages: [].concat(charts)
             });
         }
     };
@@ -86,7 +86,7 @@ function login(apiKey, clientId, apis) {
             document.body.appendChild(dialog);
             dialog.id = SIGN_IN_ID;
             gapi.signin2.render(SIGN_IN_ID, {
-                'longtitle': true
+                longtitle: true
             });
         }
         dialog.showModal();
@@ -107,10 +107,11 @@ function login(apiKey, clientId, apis) {
             const scope = [...new Set(apis.filter(api => api.scopes).map(api => api.scopes.join(' ')))].join(' ');
             console.info('scope:', scope);
             return gapi.client.init({
-                'apiKey': apiKey,
-                'clientId': clientId,
-                'discoveryDocs': discoveryDocs,
-                'scope': scope
+                apiKey: apiKey,
+                clientId: clientId,
+                discoveryDocs: discoveryDocs,
+                scope: scope,
+                fetch_basic_profile: true
             });
         })
         .then(signinDialog)

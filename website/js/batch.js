@@ -28,7 +28,7 @@ class ThrottledBatch {
                         console.info(`ThrottledBatch calling batch { number:${i}, length:${batch.length} }`);
                         const gbatch = gapi.client.newBatch();
                         batch.forEach(id => gbatch.add(this.queue[id], {
-                            'id': id
+                            id: id
                         }));
                         gbatch.then(batchResult => {
                             console.info(`ThrottledBatch response for batch ${i}`);
