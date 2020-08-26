@@ -1,4 +1,4 @@
-/*global gapi, login, google, ThrottledBatch */
+/*global gapi, login, google, ThrottledBatch, persistentCoalesce */
 /*jshint esversion: 6 */
 /*jshint unused:true */
 /*jshint strict:true */
@@ -6,42 +6,49 @@
 "use strict";
 
 const
+    /** @type {boolean} */
     IS_PUBLIC = window.location.toString().includes('appspot'),
+    /** @type {string} */
     CLIENT_ID = IS_PUBLIC ? "86475508105-7j240ho1u1kaiq3qfnv07finu3m5v8or.apps.googleusercontent.com" : "593562380651-0g80tgi1jqrfvaf427n6ilur6uflktna.apps.googleusercontent.com",
+    /** @type {string} */
     API_KEY = IS_PUBLIC ? "AIzaSyAPKnarANiEQJyXR1aJD4-9kCahMBzMV7s" : "AIzaSyC4FAjLw2DK-fz68kuR44O5DoZ6SWp1SlY",
     APIS = [
         {
-            'gapi': 'oauth2',
-            'discovery': 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
-            'scopes': ['profile']
+            gapi: 'oauth2',
+            discovery: 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
+            scopes: ['profile']
         },
         {
-            'gapi': 'drive',
-            'discovery': 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
-            'scopes': [
+            gapi: 'drive',
+            discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
+            scopes: [
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/drive.metadata.readonly'
             ]
         },
         {
-            'chart': 'corechart'
+            chart: 'corechart'
         },
         {
-            'chart': 'table'
+            chart: 'table'
         }
     ];
 
 // Information that we encounter along the way.
-const
-    fileData = {}, // ID to Name lookup at the end
-    nameToEmail = {} // hack around an API bug
-;
+const fileData = {}; // ID to Name lookup at the end
 
-let
-    myInfo = null, // Who the current user is
-    bubbleDataTable = null; // For adding values to the bubble chart
-    listDataTable = null; // For adding values to the document list
+/** @type {?string} */
+let myEmail = null; // Who the current user is
+let bubbleDataTable = null; // For adding values to the bubble chart
+let listDataTable = null; // For adding values to the document list
 
+const oldestDate = new Date();
+oldestDate.setFullYear(oldestDate.getFullYear() - 2);
+const oldestDateString = oldestDate.toISOString();
+
+/**
+ * Guava-like key to array.  (duplicates in value array are ok)
+ */
 class Multimap {
     constructor() {
         this.counts = {};
@@ -55,12 +62,11 @@ class Multimap {
     }
 }
 
-
 function processBatches(arr) {
     const batchComments = arr[0],
         batchRevisions = arr[1];
 
-    //ID to rows of info
+    // ID to rows of info
     const simpleBucket = new Multimap();
 
     // TODO: any less ugly way to write this code?
@@ -73,78 +79,68 @@ function processBatches(arr) {
             return;
         }
         if (commentResult.result.comments) {
-            commentResult.result.comments.forEach(comment => {
-                if (!comment.author || !comment.createdTime) {
-                    console.error('Comment missing info:' + JSON.stringify(comment));
-                    return;
-                }
-                // TODO: const commentAuthorId =  comment.author.emailAddress || comment.author.displayName;
-
-                // Always be looking for lookups.
-                if (comment.author.emailAddress &&
-                    comment.author.displayName) {
-                    nameToEmail[comment.author.displayName] = comment.author.emailAddress;
-                }
-
-                simpleBucket.put(fileId, {
-                    'type': 'comment',
-                    'emailAddress': comment.author.emailAddress,
-                    'ts': comment.createdTime
-                });
-                if (comment.replies) {
-                    comment.replies.forEach(reply => {
-
-                        // Always be looking for lookups.
-                        if (reply.author &&
-                            reply.author.displayName &&
-                            reply.author.emailAddress) {
-                            nameToEmail[reply.author.displayName] = reply.author.emailAddress;
-                        }
-
-
-                        if (reply.author &&
-                            reply.author.displayName &&
-                            !reply.author.emailAddress) {
-                            reply.author.emailAddress = nameToEmail[reply.author.displayName];
-                            if (reply.author.emailAddress) {
-                                console.info(`Recovered email for reply by ${reply.author.displayName}`);
-                            }
-                        }
-
-                        if (!reply.author || !reply.author.emailAddress || !reply.createdTime) {
-                            console.error('Reply missing info:' + JSON.stringify(reply));
-                            return;
-                        }
-                        simpleBucket.put(fileId, {
-                            'type': 'reply',
-                            'emailAddress': reply.author.emailAddress,
-                            'ts': reply.createdTime
-                        });
-
+            commentResult.result.comments
+                .filter(comment =>
+                    comment.author &&
+                    (comment.author.emailAddres || comment.author.displayName) &&
+                    comment.createdTime
+                )
+                .forEach(comment => {
+                    /** @type {string} */
+                    const commentKey = persistentCoalesce(
+                        comment.author.emailAddress,
+                        comment.author.displayName
+                    );
+                    simpleBucket.put(fileId, {
+                        type: 'comment',
+                        author: commentKey,
+                        ts: comment.createdTime
                     });
-                }
-            });
+
+                    if (comment.replies) {
+                        comment.replies.filter(reply =>
+                            reply.author &&
+                            (reply.author.emailAddress || reply.author.displayName) &&
+                            reply.createdTime
+                        ).forEach(reply => {
+                            /** @type {string} */
+                            const replyKey = persistentCoalesce(
+                                reply.author.emailAddress,
+                                reply.author.displayName
+                            );
+                            simpleBucket.put(fileId, {
+                                type: 'reply',
+                                author: replyKey,
+                                ts: reply.createdTime
+                            });
+                        });
+                    }
+                });
         }
     });
 
     console.log(`Investigating revision: ${Object.keys(batchRevisions).length}`);
-    // console.error(batchRevisions);
-    Object.keys(batchRevisions).forEach(fileId => {
+    Object.keys(batchRevisions).forEach(/** @type {string} */fileId => {
         const revisionResult = batchRevisions[fileId];
         if (revisionResult.result.error) {
             console.error('Revision batch error:', fileId, revisionResult.result.error);
             return;
         }
         if (revisionResult.result.revisions) {
-            revisionResult.result.revisions.forEach(revision => {
-                if (!revision.lastModifyingUser || !revision.lastModifyingUser.emailAddress || !revision.modifiedTime) {
-                    console.error('Revision missing info:' + JSON.stringify(revision));
-                    return;
-                }
+            revisionResult.result.revisions.filter(revision =>
+                revision.lastModifyingUser &&
+                (revision.lastModifyingUser.emailAddress || revision.lastModifyingUser.displayName) &&
+                revision.modifiedTime
+            ).forEach(revision => {
+                /** @type {string} */
+                const revisionKey = persistentCoalesce(
+                    revision.lastModifyingUser.emailAddress,
+                    revision.lastModifyingUser.displayName
+                );
                 simpleBucket.put(fileId, {
-                    'type': 'revision',
-                    'emailAddress': revision.lastModifyingUser.emailAddress,
-                    'ts': revision.modifiedTime
+                    type: 'revision',
+                    author: revisionKey,
+                    ts: revision.modifiedTime
                 });
             });
         }
@@ -160,22 +156,26 @@ function processCounts(counts) {
 
     const debugData = [];
     Object.keys(counts).forEach(fileId => {
-        const maxDate = new Date(counts[fileId]
-            .reduce((max, elt) => (myInfo.emailAddress == elt.emailAddress && elt.ts > max) ? elt.ts : max).ts);
-
+        const maxDate = new Date(counts[fileId].reduce((max, elt) =>
+            (myEmail === elt.author && elt.ts > max) ? elt.ts : max).ts
+        );
+        if(maxDate < oldestDate) {
+            console.error(`Too old date for file ${fileId}, skipping.`);
+            return;
+        }
         const editCount = counts[fileId].length;
 
         // Real Name: Edits
         const contributors = {};
         counts[fileId].forEach(elt => {
-            contributors[elt.emailAddress] = (contributors[elt.emailAddress] || 0) + 1;
+            contributors[elt.author] = (contributors[elt.author] || 0) + 1;
         });
 
         const numCollaborators = Object.keys(contributors).length;
-        let percentYou = Math.round(100 * contributors[myInfo.emailAddress] / editCount);
+        let percentYou = Math.round(100 * contributors[myEmail] / editCount);
         // Work around annoying nulls, debug why later.
         if (!percentYou) {
-            console.error('Unable to calculate self contribution percent', myInfo, editCount, contributors);
+            console.error('Unable to calculate self contribution percent', myEmail, editCount, contributors);
             percentYou = 0;
         }
 
@@ -187,12 +187,12 @@ function processCounts(counts) {
             numCollaborators
         ];
         bubbleDataTable.addRow(newBubbleRow);
-        
+
         // copy row data and replace first item to include document link
         const newListRow = [...newBubbleRow];
         newListRow[0] = `<a href="${fileData[fileId].link}" target="_blank">${fileData[fileId].name}</a>`;
-
         listDataTable.addRow(newListRow);
+
         debugData.push(newListRow);
     });
 
@@ -240,10 +240,12 @@ login(API_KEY, CLIENT_ID, APIS)
     .then(() => {
 
         const profile = gapi.auth2.getAuthInstance().currentUser.get().getBasicProfile();
-        myInfo = {
-            emailAddress: profile.getEmail()
-        };
-        console.info('Auth myInfo:', myInfo);
+        myEmail = persistentCoalesce(
+            profile.getEmail(),
+            profile.getName()
+        );
+
+        console.info('Auth myEmail:', myEmail);
 
         // Have to init here, after loading google.visualization
         bubbleDataTable = new google.visualization.DataTable();
@@ -256,10 +258,6 @@ login(API_KEY, CLIENT_ID, APIS)
             dataTable.addColumn('number', 'Percent You');
             dataTable.addColumn('number', 'Distinct Collaborators');
         });
-
-        const oldestDate = new Date();
-        oldestDate.setFullYear(oldestDate.getFullYear() - 2);
-        const oldestDateString = oldestDate.toISOString();
 
         return gapi.client.drive.files.list({
             // https://developers.google.com/drive/v3/reference/files/list
@@ -280,15 +278,17 @@ login(API_KEY, CLIENT_ID, APIS)
         console.info('File 0 example:' + JSON.stringify(resp.result.files[0]));
 
         resp.result.files.forEach(file => {
-            if (file.lastModifyingUser &&
-                file.lastModifyingUser.displayName &&
-                file.lastModifyingUser.emailAddress) {
-                nameToEmail[file.lastModifyingUser.displayName] = file.lastModifyingUser.emailAddress;
-            }
 
+            if (file.lastModifyingUser) {
+                // Extra lookups.
+                persistentCoalesce(
+                    file.lastModifyingUser.emailAddress,
+                    file.lastModifyingUser.displayName
+                );
+            }
             fileData[file.id] = {
-                'name': file.name,
-                'link': file.webViewLink
+                name: file.name,
+                link: file.webViewLink
             };
         });
 
@@ -296,10 +296,10 @@ login(API_KEY, CLIENT_ID, APIS)
         const commentBatch = new ThrottledBatch(20, 3000);
         resp.result.files.forEach(file => {
             commentBatch.add(gapi.client.drive.comments.list({
-                'fileId': file.id,
-                'includeDeleted': false,
-                'pageSize': 100, // TODO(behill): more comments? API quota limits?
-                'fields': 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
+                fileId: file.id,
+                includeDeleted: false,
+                pageSize: 100, // TODO(behill): more comments? API quota limits?
+                fields: 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
             }), file.id);
         });
 
@@ -309,8 +309,8 @@ login(API_KEY, CLIENT_ID, APIS)
             .filter(file => file.capabilities.canEdit)
             .forEach(file => {
                 revisionBatch.add(gapi.client.drive.revisions.list({
-                    'fileId': file.id,
-                    'fields': 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
+                    fileId: file.id,
+                    fields: 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
                 }), file.id);
             });
 

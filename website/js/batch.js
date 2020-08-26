@@ -1,9 +1,10 @@
 /* global gapi */
-/*exported ThrottledBatch */
+/*exported ThrottledBatch, persistentCoalesce */
 /*jshint esversion: 6 */
 /*jshint unused:true */
 
-/*jshint strict:true */
+/** version abc */
+
 
 /**
  * Doesn't wait for a reply before trying next batch.
@@ -63,4 +64,44 @@ class ThrottledBatch {
 function chunk(arr, n) {
     "use strict";
     return Array.from(Array(Math.ceil(arr.length / n)), (_, i) => arr.slice(i * n, i * n + n));
+}
+
+
+const persistentCoalesceLookup = {};
+
+/**
+ * Return the first non-null arg.
+ * Remember which values can be mapped to other values.
+ * If a value can be mapped, it is.
+ * eg: "null, a, b, c" returns a, and remembers that b maps to a, and c maps to a.
+ * Don't make loops.
+ *
+ * Used to map fuzzy identifiers (names) to hard identifiers (emails)
+ *
+ * @param args multiple args, some of which may be null
+ * @return {?string}
+ */
+function persistentCoalesce(...args) {
+    let firstOkVal = null;
+    for (const arg of args) {
+        if (arg !== null) {
+            if (firstOkVal === null) {
+                firstOkVal = arg;
+            }
+            // Always set if empty, always set if not-self.
+            if (!persistentCoalesceLookup.hasOwnProperty(arg) || firstOkVal !== arg) {
+                persistentCoalesceLookup[arg] = firstOkVal;
+            }
+        }
+    }
+    // Roll up as much as possible
+    let loops = 0;
+    while (persistentCoalesceLookup.hasOwnProperty(firstOkVal) && persistentCoalesceLookup[firstOkVal] !== firstOkVal) {
+        firstOkVal = persistentCoalesceLookup[firstOkVal];
+        loops++;
+        if (loops > 1000) {
+            throw `persistentCoalesce fatal loop in ${firstOkVal} ${JSON.stringify(persistentCoalesceLookup)}`;
+        }
+    }
+    return firstOkVal;
 }
