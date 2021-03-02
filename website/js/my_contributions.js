@@ -82,7 +82,7 @@ function processBatches(arr) {
             commentResult.result.comments
                 .filter(comment =>
                     comment.author &&
-                    (comment.author.emailAddres || comment.author.displayName) &&
+                    (comment.author.emailAddress || comment.author.displayName) &&
                     comment.createdTime
                 )
                 .forEach(comment => {
