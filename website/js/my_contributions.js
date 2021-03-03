@@ -198,6 +198,7 @@ function processCounts(counts) {
 
     console.log('debugData', JSON.stringify(debugData));
 
+    // https://developers.google.com/chart/interactive/docs/gallery/bubblechart#configuration-options
     const optionsBubble = {
         title: 'Your Documents (Color=% you, Size=# Collaborators)',
         hAxis: {
@@ -213,6 +214,7 @@ function processCounts(counts) {
                 fontSize: 10
             }
         },
+        explorer: {}, // allow pan and zoom.
         chartArea: {
             left: 80,
             top: 80,
