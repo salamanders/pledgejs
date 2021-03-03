@@ -214,7 +214,9 @@ function processCounts(counts) {
                 fontSize: 10
             }
         },
-        explorer: {}, // allow pan and zoom.
+        explorer: { // allow pan and zoom.
+            maxZoomIn: 0.1
+        },
         chartArea: {
             left: 80,
             top: 80,
