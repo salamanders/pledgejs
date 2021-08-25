@@ -261,7 +261,8 @@ login(API_KEY, CLIENT_ID, APIS)
 
         return gapi.client.drive.files.list({
             // https://developers.google.com/drive/v3/reference/files/list
-            'corpus': 'user',
+            'corpora': 'allDrives',
+            'supportsAllDrives': true,
             'pageSize': 200,
             'orderBy': 'modifiedByMeTime desc',
             'spaces': 'drive',
