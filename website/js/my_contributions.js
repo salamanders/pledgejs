@@ -159,7 +159,7 @@ function processCounts(counts) {
         const maxDate = new Date(counts[fileId].reduce((max, elt) =>
             (myEmail === elt.author && elt.ts > max) ? elt.ts : max).ts
         );
-        if(maxDate < oldestDate) {
+        if (maxDate < oldestDate) {
             console.error(`Too old date for file ${fileId}, skipping.`);
             return;
         }
@@ -262,6 +262,7 @@ login(API_KEY, CLIENT_ID, APIS)
         return gapi.client.drive.files.list({
             // https://developers.google.com/drive/v3/reference/files/list
             'corpora': 'allDrives',
+            'includeItemsFromAllDrives': true,
             'supportsAllDrives': true,
             'pageSize': 200,
             'orderBy': 'modifiedByMeTime desc',

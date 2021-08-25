@@ -1,6 +1,6 @@
 # application: pledgejs
 # version: 1
-runtime: python38
+runtime: python39
 
 handlers:
 - url: /main.py
@@ -39,5 +39,5 @@ handlers:
 - url: /README.md
   mime_type: text/markdown
   static_files: README.md
-  upload: README.md
+  upload: README\.md
   secure: always
