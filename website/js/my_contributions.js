@@ -36,12 +36,17 @@ const
 
 // Information that we encounter along the way.
 const fileData = {}; // ID to Name lookup at the end
+// Sometimes the API returns a name, other times an email. We try to key everything off email, but it's not always possible
+const nameToEmail = {};
+const emailToName = {};
+const resolveEmail = nameOrEmail => nameToEmail[nameOrEmail] ?? nameOrEmail;
 
 /** @type {?string} */
 let myEmail = null; // Who the current user is
 let bubbleDataTable = null; // For adding values to the bubble chart
 let listDataTable = null; // For adding values to the document list
 
+// What's the oldest date we want to report on? Defaulting to last 2 years
 const oldestDate = new Date();
 oldestDate.setFullYear(oldestDate.getFullYear() - 2);
 const oldestDateString = oldestDate.toISOString();
@@ -87,10 +92,15 @@ function processBatches(arr) {
                 )
                 .forEach(comment => {
                     /** @type {string} */
-                    const commentKey = persistentCoalesce(
-                        comment.author.emailAddress,
-                        comment.author.displayName
-                    );
+                    const commentKey = 
+                        comment.author.emailAddress ??
+                        comment.author.displayName;
+
+                    if (comment.author.emailAddress && comment.author.displayName) {
+                        nameToEmail[comment.author.displayName] = comment.author.emailAddress;
+                        emailToName[comment.author.emailAddress] = comment.author.displayName;    
+                    }
+                    
                     simpleBucket.put(fileId, {
                         type: 'comment',
                         author: commentKey,
@@ -104,10 +114,15 @@ function processBatches(arr) {
                             reply.createdTime
                         ).forEach(reply => {
                             /** @type {string} */
-                            const replyKey = persistentCoalesce(
-                                reply.author.emailAddress,
-                                reply.author.displayName
-                            );
+                            const replyKey = 
+                                reply.author.emailAddress ??
+                                reply.author.displayName;
+
+                            if (reply.author.emailAddress && reply.author.displayName) {
+                                nameToEmail[reply.author.displayName] = reply.author.emailAddress;
+                                emailToName[reply.author.emailAddress] = reply.author.displayName;    
+                            }
+                            
                             simpleBucket.put(fileId, {
                                 type: 'reply',
                                 author: replyKey,
@@ -133,10 +148,10 @@ function processBatches(arr) {
                 revision.modifiedTime
             ).forEach(revision => {
                 /** @type {string} */
-                const revisionKey = persistentCoalesce(
-                    revision.lastModifyingUser.emailAddress,
-                    revision.lastModifyingUser.displayName
-                );
+                const revisionKey = 
+                    revision.lastModifyingUser.emailAddress ??
+                    revision.lastModifyingUser.displayName;
+
                 simpleBucket.put(fileId, {
                     type: 'revision',
                     author: revisionKey,
@@ -156,11 +171,13 @@ function processCounts(counts) {
 
     const debugData = [];
     Object.keys(counts).forEach(fileId => {
-        const maxDate = new Date(counts[fileId].reduce((max, elt) =>
-            (myEmail === elt.author && elt.ts > max) ? elt.ts : max).ts
-        );
-        if (maxDate < oldestDate) {
-            console.error(`Too old date for file ${fileId}, skipping.`);
+        const mostRecentEditedByMe = counts[fileId]
+            .filter(elt => myEmail === resolveEmail(elt.author))
+            .map(elt => new Date(elt.ts))
+            .sort((a, b) => b - a)
+            .at(0);
+        if (mostRecentEditedByMe < oldestDate) {
+            console.warn(`Skipping, Out of date range. (${fileData[fileId].name})`);
             return;
         }
         const editCount = counts[fileId].length;
@@ -168,20 +185,21 @@ function processCounts(counts) {
         // Real Name: Edits
         const contributors = {};
         counts[fileId].forEach(elt => {
-            contributors[elt.author] = (contributors[elt.author] || 0) + 1;
+            const authorEmail = resolveEmail(elt.author);
+            contributors[authorEmail] = (contributors[authorEmail] || 0) + 1;
         });
 
         const numCollaborators = Object.keys(contributors).length;
         let percentYou = Math.round(100 * contributors[myEmail] / editCount);
         // Work around annoying nulls, debug why later.
         if (!percentYou) {
-            console.error('Unable to calculate self contribution percent', myEmail, editCount, contributors);
+            console.error('Unable to calculate self contribution percent', {name: fileData[fileId].name, editCount, contributors});
             percentYou = 0;
         }
 
         const newBubbleRow = [
             fileData[fileId].name,
-            maxDate,
+            mostRecentEditedByMe,
             editCount,
             percentYou,
             numCollaborators
@@ -220,13 +238,18 @@ function processCounts(counts) {
         chartArea: {
             left: 80,
             top: 80,
-            width: '80%',
+            width: '100%',
             height: '80%'
         }
     };
 
     const bubbleChart = new google.visualization.BubbleChart(document.getElementById('bubble_chart_div'));
     bubbleChart.draw(bubbleDataTable, optionsBubble);
+
+    // Redraw the chart if the window resizes.
+    new ResizeObserver((entries) => {
+         bubbleChart.draw(bubbleDataTable, optionsBubble);
+     }).observe(document.documentElement);
 
 
     const optionsTable = {
@@ -244,10 +267,15 @@ login(API_KEY, CLIENT_ID, APIS)
     .then(() => {
 
         const profile = gapi.auth2.getAuthInstance().currentUser.get().getBasicProfile();
-        myEmail = persistentCoalesce(
-            profile.getEmail(),
-            profile.getName()
-        );
+        myEmail = 
+            profile.getEmail() ?? 
+            profile.getName();
+
+        if (profile.getEmail() && profile.getName()) {
+            nameToEmail[profile.getName()] = profile.getEmail();
+            emailToName[profile.getEmail()] = profile.getName();
+        }
+
 
         console.info('Auth myEmail:', myEmail);
 
@@ -268,7 +296,7 @@ login(API_KEY, CLIENT_ID, APIS)
             'corpora': 'allDrives',
             'includeItemsFromAllDrives': true,
             'supportsAllDrives': true,
-            'pageSize': 200,
+            'pageSize': 250,
             'orderBy': 'modifiedByMeTime desc',
             'spaces': 'drive',
             'q': "'me' in writers" +
@@ -286,11 +314,9 @@ login(API_KEY, CLIENT_ID, APIS)
         resp.result.files.forEach(file => {
 
             if (file.lastModifyingUser) {
-                // Extra lookups.
-                persistentCoalesce(
-                    file.lastModifyingUser.emailAddress,
-                    file.lastModifyingUser.displayName
-                );
+                nameToEmail[file.lastModifyingUser.displayName] = file.lastModifyingUser.emailAddress;
+                emailToName[file.lastModifyingUser.emailAddress] = file.lastModifyingUser.displayName;
+                
             }
             fileData[file.id] = {
                 name: file.name,
@@ -299,7 +325,7 @@ login(API_KEY, CLIENT_ID, APIS)
         });
 
         // commentBatch, one for each file.
-        const commentBatch = new ThrottledBatch(20, 3000);
+        const commentBatch = new ThrottledBatch(100, 3000);
         resp.result.files.forEach(file => {
             commentBatch.add(gapi.client.drive.comments.list({
                 fileId: file.id,
@@ -310,7 +336,7 @@ login(API_KEY, CLIENT_ID, APIS)
         });
 
         // revisionBatch, one for each file. Same Quota issues.
-        const revisionBatch = new ThrottledBatch(20, 3000);
+        const revisionBatch = new ThrottledBatch(100, 3000);
         resp.result.files
             .filter(file => file.capabilities.canEdit)
             .forEach(file => {
