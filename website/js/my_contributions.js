@@ -46,8 +46,9 @@ let myEmail = null; // Who the current user is
 let bubbleDataTable = null; // For adding values to the bubble chart
 let listDataTable = null; // For adding values to the document list
 
-// What's the oldest date we want to report on?
-const oldestDate = new Date(new Date() - 180 * 24 * 60 * 60 * 1000);
+// What's the oldest date we want to report on? Defaulting to last 2 years
+const oldestDate = new Date();
+oldestDate.setFullYear(oldestDate.getFullYear() - 2);
 const oldestDateString = oldestDate.toISOString();
 
 /**
