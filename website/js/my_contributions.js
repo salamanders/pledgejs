@@ -238,6 +238,41 @@ function processCounts(counts) {
     tableChart.draw(listDataTable, optionsTable);
 }
 
+function getRelevantFiles() {    
+    const all = [];
+
+    return new Promise((resolve, reject) => {
+        fetchBatch();
+        function fetchBatch(pageToken = undefined) {
+            gapi.client.drive.files.list({
+                // https://developers.google.com/drive/v3/reference/files/list
+                'corpora': 'allDrives',
+                'includeItemsFromAllDrives': true,
+                'supportsAllDrives': true,
+                'pageSize': 250,
+                'orderBy': 'modifiedByMeTime desc',
+                'spaces': 'drive',
+                pageToken,
+                'q': "'me' in writers" +
+                    " AND trashed=false" +
+                    ` AND viewedByMeTime>='${oldestDateString}'` +
+                    ` AND modifiedTime>='${oldestDateString}'` +
+                    " AND (mimeType='application/vnd.google-apps.document' OR mimeType='application/vnd.google-apps.presentation' OR mimeType='application/vnd.google-apps.spreadsheet')",
+                'fields': 'files(capabilities/canEdit,description,id,kind,webViewLink,lastModifyingUser(displayName,me,emailAddress),name),nextPageToken'
+            }).then(resp => {
+              console.info('Files found in this batch:', resp.result.files.length);
+              all.push(...resp.result.files);
+        
+              // Recursively fetch it all
+              if (resp.result.nextPageToken) {
+                fetchBatch(resp.result.nextPageToken);
+              } else {
+                return resolve(all);
+              }
+            }).catch(error => reject(error));
+        }
+    });
+}
 
 /** Authorize, get 200 most recently modified files that you can edit */
 login(API_KEY, CLIENT_ID, APIS)
@@ -263,27 +298,13 @@ login(API_KEY, CLIENT_ID, APIS)
             dataTable.addColumn('number', 'Distinct Collaborators');
         });
 
-        return gapi.client.drive.files.list({
-            // https://developers.google.com/drive/v3/reference/files/list
-            'corpora': 'allDrives',
-            'includeItemsFromAllDrives': true,
-            'supportsAllDrives': true,
-            'pageSize': 200,
-            'orderBy': 'modifiedByMeTime desc',
-            'spaces': 'drive',
-            'q': "'me' in writers" +
-                " AND trashed=false" +
-                ` AND viewedByMeTime>='${oldestDateString}'` +
-                ` AND modifiedTime>='${oldestDateString}'` +
-                " AND (mimeType='application/vnd.google-apps.document' OR mimeType='application/vnd.google-apps.presentation' OR mimeType='application/vnd.google-apps.spreadsheet')",
-            'fields': 'files(capabilities/canEdit,description,id,kind,webViewLink,lastModifyingUser(displayName,me,emailAddress),name)'
-        });
+        return getRelevantFiles();
     })
-    .then(resp => {
-        console.info('Total files found:' + resp.result.files.length);
-        console.info('File 0 example:' + JSON.stringify(resp.result.files[0]));
+    .then(files => {
+        console.info('Total files found:' + files.length);
+        console.info('File 0 example:' + JSON.stringify(files[0]));
 
-        resp.result.files.forEach(file => {
+        files.forEach(file => {
 
             if (file.lastModifyingUser) {
                 // Extra lookups.
@@ -300,7 +321,7 @@ login(API_KEY, CLIENT_ID, APIS)
 
         // commentBatch, one for each file.
         const commentBatch = new ThrottledBatch(20, 3000);
-        resp.result.files.forEach(file => {
+        files.forEach(file => {
             commentBatch.add(gapi.client.drive.comments.list({
                 fileId: file.id,
                 includeDeleted: false,
@@ -311,7 +332,7 @@ login(API_KEY, CLIENT_ID, APIS)
 
         // revisionBatch, one for each file. Same Quota issues.
         const revisionBatch = new ThrottledBatch(20, 3000);
-        resp.result.files
+        files
             .filter(file => file.capabilities.canEdit)
             .forEach(file => {
                 revisionBatch.add(gapi.client.drive.revisions.list({
