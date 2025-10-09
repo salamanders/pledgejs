@@ -16,7 +16,10 @@ const
         {
             gapi: 'oauth2',
             discovery: 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
-            scopes: ['profile']
+            scopes: [
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/userinfo.profile'
+            ]
         },
         {
             gapi: 'drive',
@@ -276,14 +279,12 @@ function getRelevantFiles() {
 
 /** Authorize, get 200 most recently modified files that you can edit */
 login(API_KEY, CLIENT_ID, APIS)
-    .then(() => {
-
-        const profile = gapi.auth2.getAuthInstance().currentUser.get().getBasicProfile();
+    .then(() => gapi.client.oauth2.userinfo.get())
+    .then((response) => {
         myEmail = persistentCoalesce(
-            profile.getEmail(),
-            profile.getName()
+            response.result.email,
+            response.result.name
         );
-
         console.info('Auth myEmail:', myEmail);
 
         // Have to init here, after loading google.visualization

@@ -3,26 +3,19 @@
 /*jshint unused:true */
 /*exported login */
 
-/* Google API Login promise with built-in dialog box
-<code> 
-login(MY_KEY, MY_CLIENTID, [{
-  gapi:'drive',
-  discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
-  scopes: [
-    'https://www.googleapis.com/auth/drive.readonly',
-    'https://www.googleapis.com/auth/drive.metadata.readonly'
-  ]
-},{
-  chart:'gantt'
-}]).then...
-</code>
-*/
+/**
+ * Google API Login promise, migrating from gapi.auth2 to Google Identity Services.
+ * @param {string} apiKey
+ * @param {string} clientId
+ * @param {Array<Object>} apis
+ * @returns {Promise<void>}
+ */
 function login(apiKey, clientId, apis) {
 
+    let tokenClient;
+
     const blockUntilDOMReady = () => new Promise(resolve => {
-        // Block on document being fully ready, in case we need to build a login button
         if (document.readyState === 'complete') {
-            console.info(`document.readyState=${document.readyState}`);
             resolve();
             return;
         }
@@ -36,82 +29,102 @@ function login(apiKey, clientId, apis) {
     });
 
     const gapiLoad = () => new Promise(resolve => {
-        console.info('gapi.load');
-        // Promise not implemented in gapi.load
-        gapi.load('client:auth2:signin2', resolve);
+        gapi.load('client', resolve);
+    });
+
+    const gisLoad = () => new Promise((resolve, reject) => {
+        const start = performance.now();
+        const check = () => {
+            if (window.google && google.accounts && google.accounts.oauth2) {
+                resolve();
+            } else if (performance.now() - start > 10000) {
+                reject(new Error('GIS library failed to load.'));
+            } else {
+                setTimeout(check, 100);
+            }
+        };
+        check();
     });
 
     const chartLoad = (apis) => {
-        console.info('chartLoad');
         const charts = apis.filter(api => api.chart).map(api => api.chart);
         if (charts.length > 0) {
-            console.info('google.charts.load');
             return google.charts.load('current', {
                 packages: [].concat(charts)
             });
         }
+        return Promise.resolve();
     };
 
     const signinDialog = () => new Promise(resolve => {
-        console.info('signinDialog');
-        const SIGN_IN_ID = 'google-signin-button';
-        let dialog = document.querySelector('#' + SIGN_IN_ID); // ok that it may be empty
+        const SIGN_IN_BUTTON_ID = 'google-signin-button';
+        let dialog = document.getElementById(SIGN_IN_BUTTON_ID);
 
-        const signinCheck = isSignedIn => {
-            console.info(`signinCheck(${isSignedIn})`);
-            if (isSignedIn) {
-                if (dialog) {
-                    if (dialog.open) {
-                        dialog.close();
-                    }
-                    dialog.remove();
-                    console.log('closed and removed dialog with sign-in button.');
+        // If a token exists, we might not need the dialog.
+        if (gapi.client.getToken()) {
+            console.info('User already has a token.');
+            if (dialog && dialog.open) {
+                dialog.close();
+            }
+            resolve();
+            return;
+        }
+
+        // If no token, we need to show the sign-in button.
+        console.info('User not signed-in, building the button.');
+        if (!dialog) {
+            dialog = document.createElement('dialog');
+            dialog.id = SIGN_IN_BUTTON_ID;
+            const button = document.createElement('button');
+            button.className = 'mdl-button mdl-js-button mdl-button--raised mdl-button--colored';
+            button.innerText = 'Sign In / Authorize';
+            dialog.appendChild(button);
+            document.body.appendChild(dialog);
+
+            button.addEventListener('click', () => {
+                tokenClient.requestAccessToken({prompt: 'consent'});
+            });
+        }
+
+        tokenClient.callback = (resp) => {
+            if (resp.error) {
+                console.error('GIS Error:', resp.error);
+                // Don't reject the promise, allow user to try again.
+            } else {
+                console.info('Token acquired.');
+                if (dialog.open) {
+                    dialog.close();
                 }
                 resolve();
             }
         };
-        const gai = gapi.auth2.getAuthInstance();
 
-        console.info('listening for signed-in user change');
-        gai.isSignedIn.listen(signinCheck);
-        console.info('checking for already signed-in user');
-        if (gai.isSignedIn.get()) {
-            signinCheck(true);
-            return;
+        if (!dialog.open) {
+            dialog.showModal();
         }
-        console.info('user not signed-in, build the button.');
-        if (!dialog) {
-            console.info('Constructing sign-in button in modal dialog.');
-            dialog = document.createElement('dialog');
-            document.body.appendChild(dialog);
-            dialog.id = SIGN_IN_ID;
-            gapi.signin2.render(SIGN_IN_ID, {
-                longtitle: true
-            });
-        }
-        dialog.showModal();
     });
+
 
     return Promise.resolve()
         .then(() => {
-            console.assert(window.gapi, `Expected window.gapi from '<script src="https://apis.google.com/js/api.js"></script>'`);
             console.group();
             console.time('Auth');
             console.info('Auth:beginning.');
         })
-        // blockUntilDOMReady must be before gapi.client.init because init needs an iframe
-        .then(() => Promise.all([blockUntilDOMReady(), gapiLoad(), chartLoad(apis)]))
+        .then(() => Promise.all([blockUntilDOMReady(), gapiLoad(), gisLoad(), chartLoad(apis)]))
         .then(() => {
             const discoveryDocs = apis.filter(api => api.discovery).map(api => api.discovery);
-            console.info('discoveryDocs:', discoveryDocs);
-            const scope = [...new Set(apis.filter(api => api.scopes).map(api => api.scopes.join(' ')))].join(' ');
-            console.info('scope:', scope);
             return gapi.client.init({
                 apiKey: apiKey,
-                clientId: clientId,
                 discoveryDocs: discoveryDocs,
+            });
+        })
+        .then(() => {
+            const scope = [...new Set(apis.filter(api => api.scopes).reduce((acc, api) => acc.concat(api.scopes), []))].join(' ');
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: clientId,
                 scope: scope,
-                fetch_basic_profile: true
+                callback: () => {}, // Callback is handled in signinDialog
             });
         })
         .then(signinDialog)
@@ -120,5 +133,4 @@ function login(apiKey, clientId, apis) {
             console.timeEnd('Auth');
             console.groupEnd();
         });
-
 }
