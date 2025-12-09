@@ -1,5 +1,5 @@
-/*global gapi, login, google, ThrottledBatch, persistentCoalesce */
-/*jshint esversion: 6 */
+/*global login, google, ThrottledBatch, persistentCoalesce */
+/*jshint esversion: 8 */
 /*jshint unused:true */
 /*jshint strict:true */
 /*jshint -W097 */
@@ -14,16 +14,12 @@ const
     API_KEY = IS_PUBLIC ? "AIzaSyAPKnarANiEQJyXR1aJD4-9kCahMBzMV7s" : "AIzaSyC4FAjLw2DK-fz68kuR44O5DoZ6SWp1SlY",
     APIS = [
         {
-            gapi: 'oauth2',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
             scopes: [
                 'https://www.googleapis.com/auth/userinfo.email',
                 'https://www.googleapis.com/auth/userinfo.profile'
             ]
         },
         {
-            gapi: 'drive',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
             scopes: [
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/drive.metadata.readonly'
@@ -44,10 +40,36 @@ const fileData = {}; // ID to Name lookup at the end
 let myEmail = null; // Who the current user is
 let bubbleDataTable = null; // For adding values to the bubble chart
 let listDataTable = null; // For adding values to the document list
+/** @type {?string} */
+let accessToken = null;
 
 const oldestDate = new Date();
 oldestDate.setFullYear(oldestDate.getFullYear() - 2);
 const oldestDateString = oldestDate.toISOString();
+
+/**
+ * Helper to make authenticated fetches
+ * @param {string} url
+ * @param {object} options
+ */
+async function authFetch(url, options = {}) {
+    // Append API Key if needed, but Access Token is usually enough for these scopes.
+    // However, including API Key is good practice for quota allocation.
+    const urlObj = new URL(url);
+    urlObj.searchParams.append('key', API_KEY);
+
+    if (!options.headers) {
+        options.headers = {};
+    }
+    options.headers['Authorization'] = `Bearer ${accessToken}`;
+
+    const response = await fetch(urlObj.toString(), options);
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Fetch error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+    return response.json();
+}
 
 /**
  * Guava-like key to array.  (duplicates in value array are ok)
@@ -153,7 +175,9 @@ function processBatches(arr) {
 
 function processCounts(counts) {
     const spinner = document.getElementById('spinner');
-    spinner.parentNode.removeChild(spinner);
+    if (spinner && spinner.parentNode) {
+        spinner.parentNode.removeChild(spinner);
+    }
 
     console.log('counts', counts);
 
@@ -247,28 +271,35 @@ function getRelevantFiles() {
     return new Promise((resolve, reject) => {
         fetchBatch();
         function fetchBatch(pageToken = undefined) {
-            gapi.client.drive.files.list({
-                // https://developers.google.com/drive/v3/reference/files/list
+            const url = new URL('https://www.googleapis.com/drive/v3/files');
+            const params = {
                 'corpora': 'allDrives',
-                'includeItemsFromAllDrives': true,
-                'supportsAllDrives': true,
-                'pageSize': 250,
+                'includeItemsFromAllDrives': 'true', // converted to string
+                'supportsAllDrives': 'true',
+                'pageSize': '250',
                 'orderBy': 'modifiedByMeTime desc',
                 'spaces': 'drive',
-                pageToken,
                 'q': "'me' in writers" +
                     " AND trashed=false" +
                     ` AND viewedByMeTime>='${oldestDateString}'` +
                     ` AND modifiedTime>='${oldestDateString}'` +
                     " AND (mimeType='application/vnd.google-apps.document' OR mimeType='application/vnd.google-apps.presentation' OR mimeType='application/vnd.google-apps.spreadsheet')",
                 'fields': 'files(capabilities/canEdit,description,id,kind,webViewLink,lastModifyingUser(displayName,me,emailAddress),name),nextPageToken'
-            }).then(resp => {
-              console.info('Files found in this batch:', resp.result.files.length);
-              all.push(...resp.result.files);
+            };
+            if (pageToken) {
+                params.pageToken = pageToken;
+            }
+
+            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+
+            authFetch(url.toString())
+            .then(resp => {
+              console.info('Files found in this batch:', resp.files.length);
+              all.push(...resp.files);
         
               // Recursively fetch it all
-              if (resp.result.nextPageToken) {
-                fetchBatch(resp.result.nextPageToken);
+              if (resp.nextPageToken) {
+                fetchBatch(resp.nextPageToken);
               } else {
                 return resolve(all);
               }
@@ -278,12 +309,15 @@ function getRelevantFiles() {
 }
 
 /** Authorize, get 200 most recently modified files that you can edit */
-login(API_KEY, CLIENT_ID, APIS)
-    .then(() => gapi.client.oauth2.userinfo.get())
-    .then((response) => {
+login(CLIENT_ID, APIS)
+    .then((token) => {
+        accessToken = token;
+        return authFetch('https://www.googleapis.com/oauth2/v3/userinfo');
+    })
+    .then((userInfo) => {
         myEmail = persistentCoalesce(
-            response.result.email,
-            response.result.name
+            userInfo.email,
+            userInfo.name
         );
         console.info('Auth myEmail:', myEmail);
 
@@ -303,7 +337,9 @@ login(API_KEY, CLIENT_ID, APIS)
     })
     .then(files => {
         console.info('Total files found:' + files.length);
-        console.info('File 0 example:' + JSON.stringify(files[0]));
+        if (files.length > 0) {
+            console.info('File 0 example:' + JSON.stringify(files[0]));
+        }
 
         files.forEach(file => {
 
@@ -321,25 +357,31 @@ login(API_KEY, CLIENT_ID, APIS)
         });
 
         // commentBatch, one for each file.
-        const commentBatch = new ThrottledBatch(20, 3000);
+        const commentBatch = new ThrottledBatch(6, 100);
         files.forEach(file => {
-            commentBatch.add(gapi.client.drive.comments.list({
-                fileId: file.id,
-                includeDeleted: false,
-                pageSize: 100, // TODO(behill): more comments? API quota limits?
-                fields: 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
-            }), file.id);
+            const url = new URL(`https://www.googleapis.com/drive/v3/files/${file.id}/comments`);
+            url.searchParams.append('includeDeleted', 'false');
+            url.searchParams.append('pageSize', '100');
+            url.searchParams.append('fields', 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)');
+            url.searchParams.append('key', API_KEY);
+
+            commentBatch.add(url.toString(), {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            }, file.id);
         });
 
         // revisionBatch, one for each file. Same Quota issues.
-        const revisionBatch = new ThrottledBatch(20, 3000);
+        const revisionBatch = new ThrottledBatch(6, 100);
         files
-            .filter(file => file.capabilities.canEdit)
+            .filter(file => file.capabilities && file.capabilities.canEdit)
             .forEach(file => {
-                revisionBatch.add(gapi.client.drive.revisions.list({
-                    fileId: file.id,
-                    fields: 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
-                }), file.id);
+                const url = new URL(`https://www.googleapis.com/drive/v3/files/${file.id}/revisions`);
+                url.searchParams.append('fields', 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)');
+                url.searchParams.append('key', API_KEY);
+
+                revisionBatch.add(url.toString(), {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                }, file.id);
             });
 
         // Get both batches in parallel. Possibly not good for rate limiting quotas.
@@ -348,6 +390,7 @@ login(API_KEY, CLIENT_ID, APIS)
     .then(processBatches)
     .then(processCounts)
     .catch(err => {
+        console.error('Uncaught error:', err);
         alert('Uncaught error:' + err);
         throw err;
     });
