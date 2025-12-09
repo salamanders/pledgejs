@@ -1,69 +1,91 @@
-/* global gapi */
 /*exported ThrottledBatch, persistentCoalesce */
-/*jshint esversion: 6 */
+/*jshint esversion: 8 */
 /*jshint unused:true */
 
-/** version abc */
-
-
 /**
- * Doesn't wait for a reply before trying next batch.
- * TODO: Stop on errors
+ * Executes a batch of requests in parallel chunks.
  */
 class ThrottledBatch {
-    constructor(maxPerBatch = 25, waitTimeMs = 1000) {
+    /**
+     * @param {number} maxPerBatch - Number of concurrent requests (default 6 for browsers)
+     * @param {number} waitTimeMs - Time to wait between chunks (ms)
+     */
+    constructor(maxPerBatch = 6, waitTimeMs = 1000) {
         this.maxPerBatch = maxPerBatch;
         this.waitTimeMs = waitTimeMs;
-        this.queue = {};
+        this.queue = [];
         this.results = {};
     }
 
-    /** Work through the entire queue. We don't care about ordering. */
-    execute() {
-        const batches = chunk(Object.keys(this.queue), this.maxPerBatch);
-        console.info(`ThrottledBatch trying ${batches.length} batches, wait time ${this.waitTimeMs}ms`);
-        return Promise.all(
-            batches.map((batch, i) => {
-                return new Promise(resolve => {
-                    setTimeout(() => {
-                        console.info(`ThrottledBatch calling batch { number:${i}, length:${batch.length} }`);
-                        const gbatch = gapi.client.newBatch();
-                        batch.forEach(id => gbatch.add(this.queue[id], {
-                            id: id
-                        }));
-                        gbatch.then(batchResult => {
-                            console.info(`ThrottledBatch response for batch ${i}`);
-                            Object.assign(this.results, batchResult.result);
-                            resolve();
-                        });
-                    }, i * this.waitTimeMs);
-                }).catch(err => {
-                    console.error(`Error with ThrottledBatch single batch ${i}`, err);
-                    throw err;
-                });
-            })
-        ).then(() => {
-            return this.results;
-        }).catch(err => {
-            console.error('Error with ThrottledBatch all:', err);
-            throw err;
-        });
+    /**
+     * Add a request to the batch.
+     * @param {string} url - The URL to fetch
+     * @param {object} options - The fetch options (method, headers, etc.)
+     * @param {string} id - Unique identifier for the request result
+     */
+    add(url, options, id) {
+        this.queue.push({ url, options, id });
     }
 
-    /** Add a gapi call (promise) and optional ID. */
-    add(p, id = (Object.keys(this.queue).length + 1)) {
-        this.queue[id] = p;
+    /** Work through the entire queue. */
+    async execute() {
+        console.info(`ThrottledBatch processing ${this.queue.length} requests with concurrency ${this.maxPerBatch}, wait time ${this.waitTimeMs}ms`);
+
+        const processRequest = async (item) => {
+            try {
+                const response = await fetch(item.url, item.options);
+                // Handle empty responses (like 204)
+                let data = {};
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    data = await response.json();
+                }
+
+                if (!response.ok) {
+                    return {
+                        result: {
+                            error: data.error || { code: response.status, message: response.statusText }
+                        }
+                    };
+                }
+                return { result: data };
+            } catch (err) {
+                console.error(`Error fetching ${item.id}`, err);
+                return {
+                    result: {
+                        error: { code: 0, message: err.message || 'Network Error' }
+                    }
+                };
+            }
+        };
+
+        const chunks = [];
+        for (let i = 0; i < this.queue.length; i += this.maxPerBatch) {
+            chunks.push(this.queue.slice(i, i + this.maxPerBatch));
+        }
+
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            // Wait if not first chunk
+            if (i > 0 && this.waitTimeMs > 0) {
+                await new Promise(resolve => setTimeout(resolve, this.waitTimeMs));
+            }
+
+            console.info(`ThrottledBatch processing chunk ${i} of size ${chunk.length}`);
+            const chunkPromises = chunk.map(item =>
+                processRequest(item).then(res => {
+                    this.results[item.id] = res;
+                })
+            );
+            await Promise.all(chunkPromises);
+        }
+
+        return this.results;
     }
 
     toString() {
-        return `ThrottledBatch{max:${this.maxPerBatch},wait:${this.waitTimeMs},queue:${Object.keys(this.queue).length}}`;
+        return `ThrottledBatch{max:${this.maxPerBatch},wait:${this.waitTimeMs},queue:${this.queue.length}}`;
     }
-}
-
-// Utility from http://stackoverflow.com/questions/8495687/split-array-into-chunks
-function chunk(arr, n) {
-    "use strict";
-    return Array.from(Array(Math.ceil(arr.length / n)), (_, i) => arr.slice(i * n, i * n + n));
 }
 
 
