@@ -1,71 +1,94 @@
-/* global gapi */
-/*exported ThrottledBatch, persistentCoalesce */
+/*globals ACCESS_TOKEN, API_KEY */
 /*jshint esversion: 6 */
 /*jshint unused:true */
-
-/** version abc */
-
+/*exported ThrottledBatch, persistentCoalesce, fetchWithAuth */
 
 /**
- * Doesn't wait for a reply before trying next batch.
- * TODO: Stop on errors
+ * Helper to fetch with authorization headers.
+ * @param {string} url
+ * @param {Object} options
+ * @returns {Promise<Response>}
+ */
+function fetchWithAuth(url, options = {}) {
+    if (!options.headers) {
+        options.headers = {};
+    }
+    if (typeof ACCESS_TOKEN !== 'undefined' && ACCESS_TOKEN) {
+        options.headers['Authorization'] = 'Bearer ' + ACCESS_TOKEN;
+    }
+    // Append API Key to URL if not already present
+    const urlObj = new URL(url);
+    if (typeof API_KEY !== 'undefined' && API_KEY && !urlObj.searchParams.has('key')) {
+        urlObj.searchParams.append('key', API_KEY);
+    }
+    return fetch(urlObj.toString(), options);
+}
+
+/**
+ * Manages concurrency for fetch requests.
+ * Replaces the old gapi batch functionality.
  */
 class ThrottledBatch {
-    constructor(maxPerBatch = 25, waitTimeMs = 1000) {
-        this.maxPerBatch = maxPerBatch;
+    constructor(maxConcurrent = 5, waitTimeMs = 100) {
+        this.maxConcurrent = maxConcurrent;
         this.waitTimeMs = waitTimeMs;
-        this.queue = {};
+        this.queue = [];
         this.results = {};
+        this.activeCount = 0;
     }
 
-    /** Work through the entire queue. We don't care about ordering. */
+    /**
+     * Add a request to the queue.
+     * @param {string} url The URL to fetch.
+     * @param {string} id The ID for the result map.
+     */
+    add(url, id) {
+        this.queue.push({ url, id });
+    }
+
+    /**
+     * Execute all queued requests with concurrency limit.
+     * @returns {Promise<Object>} Map of id -> result (parsed JSON)
+     */
     execute() {
-        const batches = chunk(Object.keys(this.queue), this.maxPerBatch);
-        console.info(`ThrottledBatch trying ${batches.length} batches, wait time ${this.waitTimeMs}ms`);
-        return Promise.all(
-            batches.map((batch, i) => {
-                return new Promise(resolve => {
-                    setTimeout(() => {
-                        console.info(`ThrottledBatch calling batch { number:${i}, length:${batch.length} }`);
-                        const gbatch = gapi.client.newBatch();
-                        batch.forEach(id => gbatch.add(this.queue[id], {
-                            id: id
-                        }));
-                        gbatch.then(batchResult => {
-                            console.info(`ThrottledBatch response for batch ${i}`);
-                            Object.assign(this.results, batchResult.result);
-                            resolve();
+        return new Promise((resolve, reject) => {
+            const processQueue = () => {
+                if (this.queue.length === 0 && this.activeCount === 0) {
+                    resolve(this.results);
+                    return;
+                }
+
+                while (this.activeCount < this.maxConcurrent && this.queue.length > 0) {
+                    const item = this.queue.shift();
+                    this.activeCount++;
+
+                    console.info(`Fetching ${item.id} (Active: ${this.activeCount})`);
+
+                    fetchWithAuth(item.url)
+                        .then(resp => {
+                            if (!resp.ok) {
+                                console.error(`Error fetching ${item.id}: ${resp.statusText}`);
+                                return { error: resp.statusText }; // Mimic gapi error structure somewhat?
+                            }
+                            return resp.json();
+                        })
+                        .then(data => {
+                            this.results[item.id] = data; // Store standard JSON response
+                        })
+                        .catch(err => {
+                            console.error(`Network error for ${item.id}:`, err);
+                            this.results[item.id] = { error: err.message };
+                        })
+                        .finally(() => {
+                            this.activeCount--;
+                            setTimeout(processQueue, this.waitTimeMs); // Small delay before picking next
                         });
-                    }, i * this.waitTimeMs);
-                }).catch(err => {
-                    console.error(`Error with ThrottledBatch single batch ${i}`, err);
-                    throw err;
-                });
-            })
-        ).then(() => {
-            return this.results;
-        }).catch(err => {
-            console.error('Error with ThrottledBatch all:', err);
-            throw err;
+                }
+            };
+            processQueue();
         });
     }
-
-    /** Add a gapi call (promise) and optional ID. */
-    add(p, id = (Object.keys(this.queue).length + 1)) {
-        this.queue[id] = p;
-    }
-
-    toString() {
-        return `ThrottledBatch{max:${this.maxPerBatch},wait:${this.waitTimeMs},queue:${Object.keys(this.queue).length}}`;
-    }
 }
-
-// Utility from http://stackoverflow.com/questions/8495687/split-array-into-chunks
-function chunk(arr, n) {
-    "use strict";
-    return Array.from(Array(Math.ceil(arr.length / n)), (_, i) => arr.slice(i * n, i * n + n));
-}
-
 
 const persistentCoalesceLookup = {};
 

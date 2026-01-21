@@ -1,4 +1,4 @@
-/*global gapi, login, google, ThrottledBatch, persistentCoalesce */
+/*global login, google, ThrottledBatch, persistentCoalesce, fetchWithAuth */
 /*jshint esversion: 6 */
 /*jshint unused:true */
 /*jshint strict:true */
@@ -14,16 +14,12 @@ const
     API_KEY = IS_PUBLIC ? "AIzaSyAPKnarANiEQJyXR1aJD4-9kCahMBzMV7s" : "AIzaSyC4FAjLw2DK-fz68kuR44O5DoZ6SWp1SlY",
     APIS = [
         {
-            gapi: 'oauth2',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest',
             scopes: [
                 'https://www.googleapis.com/auth/userinfo.email',
                 'https://www.googleapis.com/auth/userinfo.profile'
             ]
         },
         {
-            gapi: 'drive',
-            discovery: 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest',
             scopes: [
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/drive.metadata.readonly'
@@ -75,14 +71,16 @@ function processBatches(arr) {
     // TODO: any less ugly way to write this code?
     console.info(`Repacking comments into a simpler object: ${Object.keys(batchComments).length}`);
     Object.keys(batchComments).forEach(fileId => {
-        // console.error('commentResult', fileId, batchComments[fileId]);
         const commentResult = batchComments[fileId];
-        if (commentResult.result.error) {
-            console.error('Comment batch error:', fileId, commentResult.result.error);
+
+        if (commentResult.error) {
+            console.error('Comment batch error:', fileId, commentResult.error);
             return;
         }
-        if (commentResult.result.comments) {
-            commentResult.result.comments
+
+        // fetch returns JSON directly, so we don't need .result.comments, just .comments
+        if (commentResult.comments) {
+            commentResult.comments
                 .filter(comment =>
                     comment.author &&
                     (comment.author.emailAddress || comment.author.displayName) &&
@@ -125,12 +123,12 @@ function processBatches(arr) {
     console.log(`Investigating revision: ${Object.keys(batchRevisions).length}`);
     Object.keys(batchRevisions).forEach(/** @type {string} */fileId => {
         const revisionResult = batchRevisions[fileId];
-        if (revisionResult.result.error) {
-            console.error('Revision batch error:', fileId, revisionResult.result.error);
+        if (revisionResult.error) {
+            console.error('Revision batch error:', fileId, revisionResult.error);
             return;
         }
-        if (revisionResult.result.revisions) {
-            revisionResult.result.revisions.filter(revision =>
+        if (revisionResult.revisions) {
+            revisionResult.revisions.filter(revision =>
                 revision.lastModifyingUser &&
                 (revision.lastModifyingUser.emailAddress || revision.lastModifyingUser.displayName) &&
                 revision.modifiedTime
@@ -247,43 +245,62 @@ function getRelevantFiles() {
     return new Promise((resolve, reject) => {
         fetchBatch();
         function fetchBatch(pageToken = undefined) {
-            gapi.client.drive.files.list({
-                // https://developers.google.com/drive/v3/reference/files/list
+            const url = new URL('https://www.googleapis.com/drive/v3/files');
+            const params = {
                 'corpora': 'allDrives',
-                'includeItemsFromAllDrives': true,
-                'supportsAllDrives': true,
-                'pageSize': 250,
+                'includeItemsFromAllDrives': 'true',
+                'supportsAllDrives': 'true',
+                'pageSize': '250',
                 'orderBy': 'modifiedByMeTime desc',
                 'spaces': 'drive',
-                pageToken,
                 'q': "'me' in writers" +
                     " AND trashed=false" +
                     ` AND viewedByMeTime>='${oldestDateString}'` +
                     ` AND modifiedTime>='${oldestDateString}'` +
                     " AND (mimeType='application/vnd.google-apps.document' OR mimeType='application/vnd.google-apps.presentation' OR mimeType='application/vnd.google-apps.spreadsheet')",
                 'fields': 'files(capabilities/canEdit,description,id,kind,webViewLink,lastModifyingUser(displayName,me,emailAddress),name),nextPageToken'
-            }).then(resp => {
-              console.info('Files found in this batch:', resp.result.files.length);
-              all.push(...resp.result.files);
-        
-              // Recursively fetch it all
-              if (resp.result.nextPageToken) {
-                fetchBatch(resp.result.nextPageToken);
-              } else {
-                return resolve(all);
-              }
-            }).catch(error => reject(error));
+            };
+            if (pageToken) {
+                params.pageToken = pageToken;
+            }
+
+            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+
+            fetchWithAuth(url.toString())
+                .then(resp => {
+                    if (!resp.ok) {
+                        throw new Error(`Drive files list failed: ${resp.statusText}`);
+                    }
+                    return resp.json();
+                })
+                .then(result => {
+                    console.info('Files found in this batch:', result.files.length);
+                    all.push(...result.files);
+
+                    // Recursively fetch it all
+                    if (result.nextPageToken) {
+                        fetchBatch(result.nextPageToken);
+                    } else {
+                        return resolve(all);
+                    }
+                })
+                .catch(error => reject(error));
         }
     });
 }
 
 /** Authorize, get 200 most recently modified files that you can edit */
 login(API_KEY, CLIENT_ID, APIS)
-    .then(() => gapi.client.oauth2.userinfo.get())
-    .then((response) => {
+    // .then(token => ...) we could use the token explicitly but fetchWithAuth uses the global
+    .then(() => fetchWithAuth('https://www.googleapis.com/oauth2/v2/userinfo'))
+    .then(resp => {
+        if(!resp.ok) throw new Error('UserInfo fetch failed');
+        return resp.json();
+    })
+    .then((result) => {
         myEmail = persistentCoalesce(
-            response.result.email,
-            response.result.name
+            result.email,
+            result.name
         );
         console.info('Auth myEmail:', myEmail);
 
@@ -303,7 +320,9 @@ login(API_KEY, CLIENT_ID, APIS)
     })
     .then(files => {
         console.info('Total files found:' + files.length);
-        console.info('File 0 example:' + JSON.stringify(files[0]));
+        if (files.length > 0) {
+            console.info('File 0 example:' + JSON.stringify(files[0]));
+        }
 
         files.forEach(file => {
 
@@ -323,12 +342,12 @@ login(API_KEY, CLIENT_ID, APIS)
         // commentBatch, one for each file.
         const commentBatch = new ThrottledBatch(20, 3000);
         files.forEach(file => {
-            commentBatch.add(gapi.client.drive.comments.list({
-                fileId: file.id,
-                includeDeleted: false,
-                pageSize: 100, // TODO(behill): more comments? API quota limits?
-                fields: 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)'
-            }), file.id);
+            const url = new URL(`https://www.googleapis.com/drive/v3/files/${file.id}/comments`);
+            url.searchParams.append('includeDeleted', 'false');
+            url.searchParams.append('pageSize', '100');
+            url.searchParams.append('fields', 'comments(author(displayName,emailAddress),createdTime,replies(author(displayName,emailAddress),createdTime),resolved)');
+
+            commentBatch.add(url.toString(), file.id);
         });
 
         // revisionBatch, one for each file. Same Quota issues.
@@ -336,10 +355,10 @@ login(API_KEY, CLIENT_ID, APIS)
         files
             .filter(file => file.capabilities.canEdit)
             .forEach(file => {
-                revisionBatch.add(gapi.client.drive.revisions.list({
-                    fileId: file.id,
-                    fields: 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)'
-                }), file.id);
+                const url = new URL(`https://www.googleapis.com/drive/v3/files/${file.id}/revisions`);
+                url.searchParams.append('fields', 'revisions(lastModifyingUser(displayName,me,emailAddress),modifiedTime)');
+
+                revisionBatch.add(url.toString(), file.id);
             });
 
         // Get both batches in parallel. Possibly not good for rate limiting quotas.

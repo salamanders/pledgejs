@@ -1,0 +1,19 @@
+{
+  "name": "pledgejs",
+  "version": "1.0.0",
+  "description": "PledgeJS Frontend",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint website/js/*.js",
+    "format": "prettier --write website/js/*.js"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0",
+    "jest-environment-jsdom": "^29.0.0",
+    "prettier": "^3.0.0"
+  }
+}
